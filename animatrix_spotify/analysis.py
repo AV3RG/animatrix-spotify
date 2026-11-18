@@ -50,17 +50,20 @@ def _run(cmd, timeout):
 
 
 def _candidates(track):
-    """YouTube video ids worth trying, best first."""
+    """YouTube video ids worth trying, best first. YouTube Music's song
+    results (official audio) come first; plain search only if those fail."""
     query = f"{track['artist'].split(',')[0]} {track['title']}"
-    ids = []
+    seen = set()
     for url in ("https://music.youtube.com/search?q=" + urllib.parse.quote_plus(query) + "#songs",
-                "ytsearch6:" + query):
+                "ytsearch5:" + query):
         try:
             out = _run(YTDLP + ["--flat-playlist", "--playlist-end", "4", "--print", "id", url], 40).stdout
         except subprocess.TimeoutExpired:
             continue
-        ids += [i for i in out.split() if re.fullmatch(r"[\w-]{11}", i) and i not in ids]
-    return ids[:7]
+        for i in out.split():
+            if re.fullmatch(r"[\w-]{11}", i) and i not in seen:
+                seen.add(i)
+                yield i
 
 
 def _fetch_pcm(video_id, seconds):
@@ -112,31 +115,36 @@ def _safe(track_id):
     return re.sub(r"[^\w.-]", "_", track_id)
 
 
-class Analyzer(threading.Thread):
-    """Background worker. want(current, upcoming) sets what to prepare;
-    get(track_id) returns the timeline once it is ready."""
+class Analyzer:
+    """Background workers. want(current, upcoming) sets what to prepare;
+    get(track_id) returns the timeline once it is ready. The current track
+    has a worker of its own so a skip never waits behind queued songs."""
 
     def __init__(self):
-        super().__init__(daemon=True)
         os.makedirs(CACHE, exist_ok=True)
         self.ready = {}
         self.wanted = []
+        self.busy = set()
         self.cv = threading.Condition()
         self.enabled = bool(FFMPEG)
         if not self.enabled:
             _log("beat sync disabled: ffmpeg not found")
 
+    def start(self):
+        for current in (True, False):
+            threading.Thread(target=self._work, args=(current,), daemon=True).start()
+
     def want(self, current, upcoming=()):
         with self.cv:
-            self.wanted = [t for t in [current, *upcoming] if t and t.get("kind") == "track"]
-            self.cv.notify()
+            self.wanted = [t if t and t.get("kind") == "track" else None for t in [current, *upcoming]]
+            self.cv.notify_all()
 
     def get(self, track_id):
         return self.ready.get(track_id)
 
-    def _next(self):
-        for t in self.wanted:
-            if t["id"] in self.ready:
+    def _next(self, current):
+        for t in (self.wanted[:1] if current else self.wanted[1:]):
+            if not t or t["id"] in self.ready or t["id"] in self.busy:
                 continue
             miss = os.path.join(CACHE, _safe(t["id"]) + ".miss")
             if os.path.exists(miss) and time.time() - os.path.getmtime(miss) < MISS_RETRY:
@@ -144,11 +152,12 @@ class Analyzer(threading.Thread):
             return t
         return None
 
-    def run(self):
+    def _work(self, current):
         while True:
             with self.cv:
-                while not self.enabled or (track := self._next()) is None:
+                while not self.enabled or (track := self._next(current)) is None:
                     self.cv.wait(timeout=30)
+                self.busy.add(track["id"])
             path = os.path.join(CACHE, _safe(track["id"]))
             try:
                 if os.path.exists(path + ".npy"):
@@ -166,6 +175,10 @@ class Analyzer(threading.Thread):
             except Exception as e:
                 _log(f"beat sync failed for {track['title']}: {e}")
                 time.sleep(20)
+            finally:
+                with self.cv:
+                    self.busy.discard(track["id"])
+                    self.cv.notify_all()
 
     def _build(self, track):
         started = time.monotonic()

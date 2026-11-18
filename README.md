@@ -19,8 +19,9 @@ advance. Until a track's data is ready (about 15 s the first time it is ever
 seen), and for podcasts or tracks with no match, the bars fall back to an
 ambient animation.
 
-If the bars run consistently early or late, set `sync_offset_ms` in the config
-(raise it if the bars lag the music, lower it if they lead; try steps of 100). `beat_sync = false`
+If the bars run consistently early or late, nudge them live with
+`animatrix-spotify offset <ms>` (positive if the bars lag the music, negative if
+they lead; try steps of 50). `beat_sync = false`
 turns the feature off. A weekly timer (`animatrix-spotify-update.timer`) keeps
 yt-dlp current, since YouTube changes often.
 

@@ -18,8 +18,9 @@ DEFAULTS = {
     "brightness": 2,          # panel brightness 1-3
     "fps": 30,
     "beat_sync": True,        # real spectrum from matching YouTube audio
-    "sync_offset_ms": 0,      # raise if the bars lag the music, lower if they lead
-    "poll_seconds": 3,        # while something is playing
+    "sync_offset_ms": 0,      # raise if the bars lag the music, lower if they lead (live: `offset` command)
+    "art_pulse": False,       # pulse the artwork with the bass (costs frame rate)
+    "poll_seconds": 1,        # while something is playing
     "idle_poll_seconds": 6,   # while nothing is
     "pause_timeout": 45,      # seconds a paused track stays on the lid
 }
@@ -33,6 +34,17 @@ def load_config():
     except FileNotFoundError:
         pass
     return cfg
+
+
+def set_config(key, value):
+    """Replace or add one `key = value` line in the config file."""
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    lines = []
+    if os.path.exists(CONFIG):
+        with open(CONFIG) as f:
+            lines = [l for l in f.read().splitlines() if l.split("=")[0].strip() != key]
+    with open(CONFIG, "w") as f:
+        f.write("\n".join(lines + [f"{key} = {value}"]) + "\n")
 
 
 def log(*a):
@@ -70,7 +82,7 @@ class Poller(threading.Thread):
         while True:
             delay = self.cfg["idle_poll_seconds"]
             try:
-                cfg = load_config()
+                cfg = self.cfg = load_config()     # live: edits apply without a restart
                 if not cfg["client_id"]:
                     raise NotLoggedIn(f"no client_id in {CONFIG} - run: animatrix-spotify login --client-id <id>")
                 if sp is None or sp.client_id != cfg["client_id"]:
@@ -112,7 +124,13 @@ class Poller(threading.Thread):
             if msg != last_msg and msg:
                 log(msg)
             last_msg = msg
-            time.sleep(delay)
+            st = self.state
+            if st and st["playing"] and st["duration_ms"]:
+                # look again the moment this track should end, to catch the next one at once
+                left = st["duration_ms"] / 1000 - self.position(time.monotonic())
+                if left > 0:
+                    delay = min(delay, left + 0.25)
+            time.sleep(max(delay, 0.2))
 
 
 def run(cfg):
@@ -120,6 +138,7 @@ def run(cfg):
     poller = Poller(cfg)
     poller.start()
     matrix, last_err, lit, last_tick = None, None, False, time.monotonic()
+    lag = 0.08                 # seconds a frame takes to reach the LEDs, measured below
     try:
         while True:
             now = time.monotonic()
@@ -147,11 +166,18 @@ def run(cfg):
                 bands, kick = None, 0.0
                 beats = poller.analyzer.get(st["id"])
                 if beats is not None and st["playing"]:
-                    i = int((pos + cfg["sync_offset_ms"] / 1000) * analysis.FPS)
+                    # the song's future is known, so draw the moment this frame will
+                    # actually be on the LEDs: transfer time plus half the time it stays up
+                    live = poller.cfg
+                    i = int((pos + 1.5 * lag + live["sync_offset_ms"] / 1000) * analysis.FPS)
                     if 0 <= i < len(beats):
                         row = beats[i] / 255
-                        bands, kick = row[:-1], row[-1]
-                matrix.show(render.sample(scene.frame(t, progress, st["playing"], level, bands, kick)))
+                        bands, kick = row[:-1], row[-1] if live["art_pulse"] else 0.0
+                leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick))
+                sent = time.monotonic()
+                matrix.show(leds)
+                if bands is not None:
+                    lag += 0.1 * (min(time.monotonic() - sent, 0.3) - lag)
                 lit = True
                 time.sleep(max(0.0, (1 / cfg["fps"] if st["playing"] else 0.5) - (time.monotonic() - now)))
             except OSError as e:
@@ -188,6 +214,8 @@ def main():
     p = sub.add_parser("login", help="connect your Spotify account")
     p.add_argument("--client-id", help="Client ID of your Spotify developer app (saved to config)")
     sub.add_parser("status", help="print what Spotify reports as playing")
+    p = sub.add_parser("offset", help="nudge bar timing live: positive if bars lag the music, negative if they lead")
+    p.add_argument("ms", type=int)
     p = sub.add_parser("test", help="play a demo animation on the matrix for a few seconds")
     p.add_argument("--art", help="image file to use as album art")
     p.add_argument("--seconds", type=float, default=8)
@@ -202,19 +230,16 @@ def main():
     if args.cmd == "run":
         run(cfg)
     elif args.cmd == "login":
-        os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
         if args.client_id:
             cfg["client_id"] = args.client_id.strip()
-            lines = []
-            if os.path.exists(CONFIG):
-                with open(CONFIG) as f:
-                    lines = [l for l in f.read().splitlines() if not l.startswith("client_id")]
-            with open(CONFIG, "w") as f:
-                f.write("\n".join([f'client_id = "{cfg["client_id"]}"'] + lines) + "\n")
+            set_config("client_id", f'"{cfg["client_id"]}"')
         if not cfg["client_id"]:
             sys.exit("Pass --client-id <id> the first time (see README for creating the Spotify app).")
         spotify_client(cfg).login()
         print("Logged in. The service picks this up within ~15 seconds.")
+    elif args.cmd == "offset":
+        set_config("sync_offset_ms", str(args.ms))
+        print(f"sync_offset_ms = {args.ms} (applies within a second)")
     elif args.cmd == "status":
         try:
             st = spotify_client(cfg).now_playing()

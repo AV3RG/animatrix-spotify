@@ -62,6 +62,7 @@ class Matrix:
         os.write(self.fd, pkt)
 
     def init(self):
+        self._sent = [None] * len(PREFIXES)
         self._write(_pkt(0x5E, *b"ASUS Tech.Inc."))
         self._write(_pkt(0x5E, 0xC2))
         self._write(_pkt(0x5E, 0xC4, 0x01, 0x80))  # built-in animations off
@@ -70,11 +71,17 @@ class Matrix:
 
     def show(self, leds):
         """leds: NUM_LEDS brightness bytes in wire order."""
-        data = bytes(min(v, 254) for v in leds)
+        data = bytes(leds).replace(b"\xff", b"\xfe")
+        dirty = False
         for i, prefix in enumerate(PREFIXES):
             chunk = data[i * PANE:(i + 1) * PANE]
+            if chunk == self._sent[i]:
+                continue        # every packet takes ~20 ms on the wire: skip unchanged panes
             self._write(prefix + chunk + bytes(PACKET - 7 - len(chunk)))
-        self._write(_pkt(0x5E, 0xC0, 0x03))  # flush
+            self._sent[i] = chunk
+            dirty = True
+        if dirty:
+            self._write(_pkt(0x5E, 0xC0, 0x03))  # flush
 
     def clear(self):
         self.show(bytes(NUM_LEDS))

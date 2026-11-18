@@ -83,7 +83,7 @@ class Scene:
         d = ImageDraw.Draw(c)
         if self.art:
             art = self.art
-            if bands is not None:      # artwork breathes with the kick drum
+            if kick:                   # artwork breathes with the kick drum
                 gain = 0.72 + 0.28 * kick
                 art = art.point([round(v * gain) for v in range(256)])
             c.paste(art, (ART_X, 0))
