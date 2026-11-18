@@ -1,0 +1,13 @@
+[project]
+name = "animatrix-spotify"
+version = "0.1.0"
+description = "Show what's playing on Spotify (any device) on the ROG Zephyrus G14 AniMe Matrix"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10",
+    "numpy>=1.26",
+    "yt-dlp[default]>=2026.10.26",
+]
+
+[tool.uv]
+package = false

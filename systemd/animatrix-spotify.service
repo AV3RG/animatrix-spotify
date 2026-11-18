@@ -1,0 +1,12 @@
+[Unit]
+Description=Spotify now-playing on the AniMe Matrix
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/animatrix-spotify
+ExecStart=%h/animatrix-spotify/.venv/bin/python -m animatrix_spotify run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

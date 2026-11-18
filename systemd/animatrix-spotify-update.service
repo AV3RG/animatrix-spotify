@@ -1,0 +1,8 @@
+[Unit]
+Description=Keep yt-dlp current for animatrix-spotify (YouTube changes often)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/animatrix-spotify
+ExecStart=%h/.local/bin/uv sync -q --upgrade-package yt-dlp
+ExecStartPost=/usr/bin/systemctl --user try-restart animatrix-spotify.service
