@@ -6,7 +6,7 @@ import threading
 import time
 import tomllib
 
-from . import analysis, render
+from . import analysis, lyrics, render
 from .matrix import Matrix
 from .spotify import NotLoggedIn, RateLimited, Spotify, fetch_image
 
@@ -20,8 +20,9 @@ DEFAULTS = {
     "beat_sync": True,        # real spectrum from matching YouTube audio
     "sync_offset_ms": 0,      # raise if the bars lag the music, lower if they lead (live: `offset` command)
     "art_pulse": False,       # pulse the artwork with the bass (costs frame rate)
-    "poll_seconds": 1,        # while something is playing
-    "idle_poll_seconds": 6,   # while nothing is
+    "poll_seconds": 5,        # while something is playing (1 s got the app rate limited for hours)
+    "idle_poll_seconds": 15,  # while nothing is; 60 after ten idle minutes
+    "lyrics": True,           # synced lyrics from lrclib.net in place of the title
     "pause_timeout": 45,      # seconds a paused track stays on the lid
 }
 
@@ -65,6 +66,8 @@ class Poller(threading.Thread):
         self.scene = None
         self.scene_started = 0.0
         self.paused_since = None
+        self.idle_since = time.monotonic()
+        self.queue_due = False
         self.anchor = 0.0      # song position (s) minus monotonic clock, smoothed across polls
         self.analyzer = analysis.Analyzer()
         if cfg["beat_sync"]:
@@ -77,10 +80,17 @@ class Poller(threading.Thread):
             return st["progress_ms"] / 1000
         return self.anchor + now
 
+    def _load_lyrics(self, scene):
+        try:
+            scene.lyrics = lyrics.fetch(scene.track)
+        except Exception as e:
+            log("lyrics failed:", e)
+
     def run(self):
         sp, last_msg = None, None
         while True:
-            delay = self.cfg["idle_poll_seconds"]
+            idle = time.monotonic() - self.idle_since > 600
+            delay = 60 if idle else self.cfg["idle_poll_seconds"]
             try:
                 cfg = self.cfg = load_config()     # live: edits apply without a restart
                 if not cfg["client_id"]:
@@ -106,8 +116,17 @@ class Poller(threading.Thread):
                         self.scene = render.Scene(st, art)
                         self.scene_started = time.monotonic()
                         log(f"now playing: {st['title']} - {st['artist']} (on {st['device']})")
-                        self.analyzer.want(st, sp.queue() if self.cfg["beat_sync"] else ())
+                        self.analyzer.want(st)
+                        self.queue_due = cfg["beat_sync"]
+                        if cfg["lyrics"] and st["kind"] == "track":
+                            threading.Thread(target=self._load_lyrics, args=(self.scene,), daemon=True).start()
+                    elif self.queue_due:
+                        # second sighting of a track: it was not skipped, so its
+                        # queue is worth a request
+                        self.queue_due = False
+                        self.analyzer.want(st, sp.queue())
                     if st["playing"]:
+                        self.idle_since = time.monotonic()
                         self.paused_since = None
                         delay = self.cfg["poll_seconds"]
                     elif self.paused_since is None:
@@ -116,9 +135,11 @@ class Poller(threading.Thread):
             except NotLoggedIn as e:
                 self.state, msg, sp, delay = None, str(e), None, 15
             except RateLimited as e:
-                msg, delay = "rate limited by Spotify", e.retry_after + 1
+                # dark lid rather than a frozen track
+                self.state = None
+                msg, delay = f"rate limited by Spotify for {e.retry_after // 60 + 1} more minutes", e.retry_after + 5
             except Exception as e:  # network down, Spotify hiccup: keep last state briefly
-                msg, delay = f"Spotify request failed: {e}", 10
+                msg, delay = f"Spotify request failed: {e}", 15
                 if self.state and time.monotonic() - self.state["at"] > 30:
                     self.state = None
             if msg != last_msg and msg:
@@ -173,7 +194,7 @@ def run(cfg):
                     if 0 <= i < len(beats):
                         row = beats[i] / 255
                         bands, kick = row[:-1], row[-1] if live["art_pulse"] else 0.0
-                leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick))
+                leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick, pos + lag))
                 sent = time.monotonic()
                 matrix.show(leds)
                 if bands is not None:
@@ -245,6 +266,8 @@ def main():
             st = spotify_client(cfg).now_playing()
         except NotLoggedIn as e:
             sys.exit(str(e))
+        except RateLimited as e:
+            sys.exit(f"rate limited by Spotify for {e.retry_after // 60 + 1} more minutes")
         print("nothing playing" if not st else
               f"{'playing' if st['playing'] else 'paused'}: {st['title']} - {st['artist']} on {st['device']}")
     elif args.cmd == "test":

@@ -121,6 +121,16 @@ class Spotify:
 
     # -- playback -----------------------------------------------------------
     def _get(self, url, _retry=True):
+        # Spotify's bans can last hours and every request during one may extend
+        # it, so the "banned until" time is kept on disk and honoured by all commands
+        ban = self.token_path + ".ratelimit"
+        try:
+            with open(ban) as f:
+                left = float(f.read()) - time.time()
+            if left > 0:
+                raise RateLimited(int(left))
+        except (FileNotFoundError, ValueError):
+            pass
         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + self._access_token()})
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
@@ -130,7 +140,10 @@ class Spotify:
                 self.token["expires_at"] = 0  # force a refresh
                 return self._get(url, _retry=False)
             if e.code == 429:
-                raise RateLimited(int(e.headers.get("Retry-After", "10")))
+                wait = int(e.headers.get("Retry-After", "10"))
+                with open(ban, "w") as f:
+                    f.write(str(time.time() + wait))
+                raise RateLimited(wait)
             raise
 
     @staticmethod
@@ -150,6 +163,7 @@ class Spotify:
             "kind": item.get("type", "track"),
             "title": item.get("name", ""),
             "artist": artist,
+            "album": (item.get("album") or {}).get("name", ""),
             "art_url": art,
             "duration_ms": item.get("duration_ms") or 0,
         }
