@@ -6,7 +6,7 @@ import threading
 import time
 import tomllib
 
-from . import analysis, render
+from . import analysis, render, ui
 from .matrix import Matrix
 from .spotify import NotLoggedIn, RateLimited, Spotify, fetch_image
 
@@ -15,6 +15,9 @@ CONFIG = os.path.join(CONFIG_DIR, "config.toml")
 DEFAULTS = {
     "client_id": "",
     "port": 8888,
+    "enabled": True,          # lid display on/off
+    "ui_host": "0.0.0.0",     # control panel address; "127.0.0.1" for this machine only, "" to disable
+    "ui_port": 8890,
     "brightness": 2,          # panel brightness 1-3
     "fps": 30,
     "beat_sync": True,        # real spectrum from matching YouTube audio
@@ -65,12 +68,12 @@ class Poller(threading.Thread):
         self.scene = None
         self.scene_started = 0.0
         self.paused_since = None
+        self.message = ""      # current problem, shown in the control panel
         self.idle_since = time.monotonic()
         self.queue_due = False
         self.anchor = 0.0      # song position (s) minus monotonic clock, smoothed across polls
         self.analyzer = analysis.Analyzer()
-        if cfg["beat_sync"]:
-            self.analyzer.start()
+        self.analyzer.start()
 
     def position(self, now):
         """Best estimate of the song position in seconds."""
@@ -109,7 +112,8 @@ class Poller(threading.Thread):
                         self.scene = render.Scene(st, art)
                         self.scene_started = time.monotonic()
                         log(f"now playing: {st['title']} - {st['artist']} (on {st['device']})")
-                        self.analyzer.want(st)
+                        if cfg["beat_sync"]:
+                            self.analyzer.want(st)
                         self.queue_due = cfg["beat_sync"]
                     elif self.queue_due:
                         # second sighting of a track: it was not skipped, so its
@@ -135,7 +139,7 @@ class Poller(threading.Thread):
                     self.state = None
             if msg != last_msg and msg:
                 log(msg)
-            last_msg = msg
+            last_msg = self.message = msg or ""
             st = self.state
             if st and st["playing"] and st["duration_ms"]:
                 # look again the moment this track should end, to catch the next one at once
@@ -150,22 +154,27 @@ def run(cfg):
     poller = Poller(cfg)
     poller.start()
     matrix, last_err, lit, last_tick = None, None, False, time.monotonic()
+    if cfg["ui_host"]:
+        ui.serve(cfg["ui_host"], cfg["ui_port"], poller, load_config, set_config,
+                 lambda: matrix is not None, log)
     lag = 0.08                 # seconds a frame takes to reach the LEDs, measured below
     try:
         while True:
             now = time.monotonic()
             resumed = now - last_tick > 20      # woke from suspend: panel needs re-init
             last_tick = now
+            cfg = poller.cfg                    # live: the control panel swaps this
             try:
                 if matrix is None:
                     matrix = Matrix(cfg["brightness"])
                     log("AniMe Matrix ready on", matrix.path)
                     last_err = None
-                elif resumed:
+                elif resumed or matrix.brightness != cfg["brightness"]:
+                    matrix.brightness = cfg["brightness"]
                     matrix.init()
                 st, scene = poller.state, poller.scene
                 paused_for = now - poller.paused_since if poller.paused_since else 0
-                if not st or not scene or paused_for > cfg["pause_timeout"]:
+                if not cfg["enabled"] or not st or not scene or paused_for > cfg["pause_timeout"]:
                     if lit:
                         matrix.clear()
                         lit = False
@@ -177,14 +186,13 @@ def run(cfg):
                 level = min(1.0, t / 0.6) * (1.0 if st["playing"] else 0.35)
                 bands, kick = None, 0.0
                 beats = poller.analyzer.get(st["id"])
-                if beats is not None and st["playing"]:
+                if beats is not None and st["playing"] and cfg["beat_sync"]:
                     # the song's future is known, so draw the moment this frame will
                     # actually be on the LEDs: transfer time plus half the time it stays up
-                    live = poller.cfg
-                    i = int((pos + 1.5 * lag + live["sync_offset_ms"] / 1000) * analysis.FPS)
+                    i = int((pos + 1.5 * lag + cfg["sync_offset_ms"] / 1000) * analysis.FPS)
                     if 0 <= i < len(beats):
                         row = beats[i] / 255
-                        bands, kick = row[:-1], row[-1] if live["art_pulse"] else 0.0
+                        bands, kick = row[:-1], row[-1] if cfg["art_pulse"] else 0.0
                 leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick))
                 sent = time.monotonic()
                 matrix.show(leds)

@@ -25,6 +25,15 @@ they lead; try steps of 50). `beat_sync = false`
 turns the feature off. A weekly timer (`animatrix-spotify-update.timer`) keeps
 yt-dlp current, since YouTube changes often.
 
+## Control panel
+
+The service hosts a small web page on port 8890 (`http://<laptop address>:8890/`)
+showing what is playing and letting you change, live: display on/off, bar
+timing, brightness, beat sync, art pulse, pause timeout, Spotify check interval
+and frame rate. It has no password and listens on every network interface; it
+can only change those settings. Set `ui_host = "127.0.0.1"` in the config to
+restrict it to the laptop itself, or `ui_host = ""` to turn it off.
+
 ## Spotify rate limits
 
 Spotify bans apps that poll too often, for up to hours. The service polls every
