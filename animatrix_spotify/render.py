@@ -63,9 +63,7 @@ class Scene:
     def __init__(self, track, art=None):
         self.track = track
         self.art = art
-        self.font = font = _font()
-        self.lyrics = []           # [(start, end, text)], filled in when fetched
-        self._line = (None, None)  # cache: (index, rendered image)
+        font = _font()
         label = track["title"] + (f"  -  {track['artist']}" if track["artist"] else "")
         w = math.ceil(font.getlength(label))
         self.scrolls = w > TEXT_W
@@ -78,28 +76,7 @@ class Scene:
         self.freq = rng.uniform(1.3, 3.4, (BARS, 3))
         self.phase = rng.uniform(0, 6.28, (BARS, 3))
 
-    def _lyric(self, pos):
-        """Band image for the lyric line sung at song position `pos`, or None.
-        The line slides through the band over the time it is sung."""
-        for i, (start, end, text) in enumerate(self.lyrics):
-            if start - 0.3 <= pos < end:
-                break
-        else:
-            return None
-        if self._line[0] != i:
-            img = Image.new("L", (math.ceil(self.font.getlength(text)) + 2, TEXT_H))
-            ImageDraw.Draw(img).text((0, TEXT_H // 2 + 1), text, font=self.font, fill=255, anchor="lm")
-            self._line = (i, img)
-        img = self._line[1]
-        band = Image.new("L", (TEXT_W, TEXT_H))
-        if img.width <= TEXT_W:
-            band.paste(img, ((TEXT_W - img.width) // 2, 0))
-        else:
-            f = min(max((pos - start) / (end - start), 0), 1)
-            band.paste(img, (-round(f * (img.width - TEXT_W)), 0))
-        return band
-
-    def frame(self, t, progress, playing=True, level=1.0, bands=None, kick=0.0, pos=None):
+    def frame(self, t, progress, playing=True, level=1.0, bands=None, kick=0.0):
         """t: seconds since the scene started. progress: 0..1.
         bands: BARS levels 0..1 from the beat data; kick: 0..1 bass hit."""
         c = Image.new("L", (W, H))
@@ -114,10 +91,7 @@ class Scene:
             d.rectangle((ART_X, 0, W, ART), outline=90, width=4)
 
         # title: scrolls right-to-left when it does not fit
-        lyric = self._lyric(pos) if pos is not None and self.lyrics else None
-        if lyric:
-            c.paste(lyric, (0, 0))
-        elif self.scrolls:
+        if self.scrolls:
             off = int(max(0, t - 1.5) * 28) % self.text_w
             band = Image.new("L", (TEXT_W, TEXT_H))
             band.paste(self.text, (-off, 0))

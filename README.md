@@ -25,13 +25,6 @@ they lead; try steps of 50). `beat_sync = false`
 turns the feature off. A weekly timer (`animatrix-spotify-update.timer`) keeps
 yt-dlp current, since YouTube changes often.
 
-## Lyrics
-
-When [LRCLIB](https://lrclib.net) has time-synced lyrics for the track, the line
-being sung replaces the title and slides through as it is sung; the title shows
-between lines. Only Latin-script lyrics are shown. `lyrics = false` in the
-config turns this off.
-
 ## Spotify rate limits
 
 Spotify bans apps that poll too often, for up to hours. The service polls every

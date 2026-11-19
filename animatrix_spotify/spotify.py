@@ -163,7 +163,6 @@ class Spotify:
             "kind": item.get("type", "track"),
             "title": item.get("name", ""),
             "artist": artist,
-            "album": (item.get("album") or {}).get("name", ""),
             "art_url": art,
             "duration_ms": item.get("duration_ms") or 0,
         }

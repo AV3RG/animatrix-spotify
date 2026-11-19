@@ -6,7 +6,7 @@ import threading
 import time
 import tomllib
 
-from . import analysis, lyrics, render
+from . import analysis, render
 from .matrix import Matrix
 from .spotify import NotLoggedIn, RateLimited, Spotify, fetch_image
 
@@ -22,7 +22,6 @@ DEFAULTS = {
     "art_pulse": False,       # pulse the artwork with the bass (costs frame rate)
     "poll_seconds": 5,        # while something is playing (1 s got the app rate limited for hours)
     "idle_poll_seconds": 15,  # while nothing is; 60 after ten idle minutes
-    "lyrics": True,           # synced lyrics from lrclib.net in place of the title
     "pause_timeout": 45,      # seconds a paused track stays on the lid
 }
 
@@ -80,12 +79,6 @@ class Poller(threading.Thread):
             return st["progress_ms"] / 1000
         return self.anchor + now
 
-    def _load_lyrics(self, scene):
-        try:
-            scene.lyrics = lyrics.fetch(scene.track)
-        except Exception as e:
-            log("lyrics failed:", e)
-
     def run(self):
         sp, last_msg = None, None
         while True:
@@ -118,8 +111,6 @@ class Poller(threading.Thread):
                         log(f"now playing: {st['title']} - {st['artist']} (on {st['device']})")
                         self.analyzer.want(st)
                         self.queue_due = cfg["beat_sync"]
-                        if cfg["lyrics"] and st["kind"] == "track":
-                            threading.Thread(target=self._load_lyrics, args=(self.scene,), daemon=True).start()
                     elif self.queue_due:
                         # second sighting of a track: it was not skipped, so its
                         # queue is worth a request
@@ -194,7 +185,7 @@ def run(cfg):
                     if 0 <= i < len(beats):
                         row = beats[i] / 255
                         bands, kick = row[:-1], row[-1] if live["art_pulse"] else 0.0
-                leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick, pos + lag))
+                leds = render.sample(scene.frame(t, progress, st["playing"], level, bands, kick))
                 sent = time.monotonic()
                 matrix.show(leds)
                 if bands is not None:
