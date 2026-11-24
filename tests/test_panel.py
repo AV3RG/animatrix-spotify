@@ -51,7 +51,7 @@ class Packets(unittest.TestCase):
 
     def test_word_layout(self):
         p = panel.word_packet(7, 3, 450, "Midnight")
-        self.assertEqual(b"LA" + struct.pack("<IHH", 7, 3, 450) + b"Midnight", p)
+        self.assertEqual(b"LA\x01\x04" + struct.pack("<IHH", 7, 3, 450) + b"\x08Midnight", p)
         none = panel.word_packet(7, None, 0, "")
         self.assertEqual(0xFFFF, struct.unpack("<H", none[8:10])[0])
         self.assertEqual(0, none[12])

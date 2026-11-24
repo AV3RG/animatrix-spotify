@@ -45,7 +45,9 @@ def estimate_words(line):
 
 
 def _finish(lines):
-    lines = sorted((l for l in lines if l["text"].strip()), key=lambda l: l["start"])
+    # Ends are worked out before blank lines are dropped: an empty [mm:ss] line marks where
+    # the previous line stops (as in wordglow).
+    lines = sorted(lines, key=lambda l: l["start"])
     for i, line in enumerate(lines):
         nxt = lines[i + 1] if i + 1 < len(lines) else None
         if not line.get("end") or line["end"] <= line["start"]:
@@ -57,7 +59,7 @@ def _finish(lines):
         for j, w in enumerate(words):
             if not w.get("end") or w["end"] <= w["start"]:
                 w["end"] = words[j + 1]["start"] if j + 1 < len(words) else max(line["end"], w["start"] + 250)
-    return lines
+    return [l for l in lines if l["text"].strip()]
 
 
 def parse_lrc(text):

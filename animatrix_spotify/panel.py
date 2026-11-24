@@ -63,7 +63,7 @@ def word_packet(track, index, left_ms, text):
     """The lyric word being sung (index None: nothing right now)."""
     t = panel_text(text).encode()[:MAX_WORD]
     idx = 0xFFFF if index is None else _clamp(index, 0, 0xFFFE)
-    return b"LA" + struct.pack("<IHH", track, idx, _clamp(left_ms, 0, 0xFFFF)) + bytes([len(t)]) + t
+    return b"LA\x01\x04" + struct.pack("<IHH", track, idx, _clamp(left_ms, 0, 0xFFFF)) + bytes([len(t)]) + t
 
 
 def art16(img):

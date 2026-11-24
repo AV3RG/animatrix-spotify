@@ -32,6 +32,13 @@ class Parsing(unittest.TestCase):
         lines = lyrics.parse_lyricsfile(text)
         self.assertEqual([(1000, 1800), (2000, 2900)], [(w["start"], w["end"]) for w in lines[0]["words"]])
 
+    def test_blank_stamp_ends_the_line(self):
+        # LRCLIB marks breaks with empty [mm:ss] lines; they end the line before (wordglow rule)
+        lines = lyrics.parse_lrc("[00:10.00]Hello world\n[00:11.20]\n[00:30.00]Next")
+        self.assertEqual(2, len(lines))
+        self.assertEqual(11200, lines[0]["end"])
+        self.assertLessEqual(lines[0]["words"][-1]["end"], 11200)
+
     def test_long_line_without_end_is_capped(self):
         lines = lyrics.parse_lrc("[00:00.00]one two\n[01:00.00]later")
         self.assertLess(lines[0]["end"], 5000)  # a line doesn't stay live through a long gap
