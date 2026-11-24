@@ -6,7 +6,7 @@ import threading
 import time
 import tomllib
 
-from . import analysis, panel, render, ui
+from . import analysis, lyrics, panel, render, ui
 from .matrix import Matrix
 from .spotify import NotLoggedIn, RateLimited, Spotify, fetch_image
 
@@ -29,6 +29,7 @@ DEFAULTS = {
     "panel_host": "",         # LED Arcade panel to stream to (IP or name), "" = off
     "panel_port": 4210,
     "panel_offset_ms": 0,     # like sync_offset_ms, for the panel's bars
+    "lyrics": True,           # look up synced lyrics (LRCLIB) for the panel's word display
 }
 
 
@@ -77,6 +78,8 @@ class Poller(threading.Thread):
         self.anchor = 0.0      # song position (s) minus monotonic clock, smoothed across polls
         self.analyzer = analysis.Analyzer()
         self.analyzer.start()
+        self.lyrics = lyrics.LyricsStore(analysis.CACHE, log=log)
+        self.lyrics.start()
 
     def position(self, now):
         """Best estimate of the song position in seconds."""
@@ -117,6 +120,8 @@ class Poller(threading.Thread):
                         log(f"now playing: {st['title']} - {st['artist']} (on {st['device']})")
                         if cfg["beat_sync"]:
                             self.analyzer.want(st)
+                        if cfg.get("lyrics", True) and cfg.get("panel_host"):
+                            self.lyrics.want(st)
                         self.queue_due = cfg["beat_sync"]
                     elif self.queue_due:
                         # second sighting of a track: it was not skipped, so its

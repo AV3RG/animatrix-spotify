@@ -6,6 +6,7 @@ Packets ('L' 'A', version 1, type; little endian), matching the firmware's link.
   1 beat: flags (bit0 playing, bit1 has beat data) | track u32 | progress u16 0-10000 | bands[9] | kick
   2 meta: track u32 | len | title | len | artist      (ASCII, each <= 48 bytes)
   3 art:  track u32 | 256 bytes, 16x16 greyscale, row-major
+  4 word: track u32 | index u16 (0xFFFF = none now) | ms left u16 | len | text (ASCII, <= 24 bytes)
 """
 import ipaddress
 import socket
@@ -17,9 +18,10 @@ import zlib
 
 from PIL import Image, ImageOps
 
-from . import analysis
+from . import analysis, lyrics
 
 MAX_TEXT = 48
+MAX_WORD = 24
 FPS = 30
 LEAD = 0.08            # seconds: WiFi hop, one panel frame and half a send interval; sync_offset_ms
                        # (the owner's correction for the lid) and panel_offset_ms come on top
@@ -55,6 +57,13 @@ def meta_packet(track, title, artist):
     t = panel_text(title).encode()[:MAX_TEXT]
     a = panel_text(artist).encode()[:MAX_TEXT]
     return b"LA\x01\x02" + struct.pack("<I", track) + bytes([len(t)]) + t + bytes([len(a)]) + a
+
+
+def word_packet(track, index, left_ms, text):
+    """The lyric word being sung (index None: nothing right now)."""
+    t = panel_text(text).encode()[:MAX_WORD]
+    idx = 0xFFFF if index is None else _clamp(index, 0, 0xFFFE)
+    return b"LA" + struct.pack("<IHH", track, idx, _clamp(left_ms, 0, 0xFFFF)) + bytes([len(t)]) + t
 
 
 def art16(img):
@@ -172,3 +181,14 @@ class PanelSender(threading.Thread):
                 row = beats[i]
                 bands, kick, has_beats = row[:analysis.NB], row[analysis.NB], True
         self._send(addr, beat_packet(st["playing"], has_beats, track, progress, bands, kick))
+
+        store = getattr(poller, "lyrics", None)
+        words = store.get(st["id"]) if store else None
+        if words:
+            t = (pos + LEAD + (cfg.get("sync_offset_ms", 0) + cfg.get("panel_offset_ms", 0)) / 1000) * 1000
+            hit = lyrics.word_at(words, t) if st["playing"] else None
+            if hit:
+                i, (start, end, text) = hit
+                self._send(addr, word_packet(track, i, end - t, text))
+            else:
+                self._send(addr, word_packet(track, None, 0, ""))
