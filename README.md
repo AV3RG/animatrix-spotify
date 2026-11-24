@@ -25,6 +25,23 @@ they lead; try steps of 50). `beat_sync = false`
 turns the feature off. A weekly timer (`animatrix-spotify-update.timer`) keeps
 yt-dlp current, since YouTube changes often.
 
+## LED Arcade panel
+
+The service can also drive an [LED Arcade](https://github.com/AV3RG/led-arcade)
+panel (a 16x16 IKEA OBEGRÄNSAD on an ESP32) on the same network: the panel shows
+its own visualizer (album art, scrolling title, beat-synced bars) and switches to
+it by itself while music plays, inside the hours set in its app (Settings, Music).
+Set the panel's address in the config and the service starts sending within a
+second, whether or not the lid is on:
+
+    panel_host = "192.168.1.27"
+
+It sends small UDP packets to port 4210 (`panel_port`) about 30 times a second
+while something plays, once a second otherwise, and makes no extra Spotify
+requests. The panel's bars follow `sync_offset_ms` too; `panel_offset_ms` nudges
+them further if they need it (positive if they lag the music). The panel only listens on the local network, so the laptop has to be
+on the same WiFi.
+
 ## Control panel
 
 The service hosts a small web page on port 8890 (`http://<laptop address>:8890/`)
