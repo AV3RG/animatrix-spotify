@@ -2,6 +2,7 @@
 import socket
 import struct
 import unittest
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -139,6 +140,20 @@ class Sender(unittest.TestCase):
         self.assertEqual(2, len(got))
         self.assertTrue(all(p[3] == 1 and p[4] == 0 for p in got))
 
+    def test_timing_matches_the_lid(self):
+        # the panel uses the lid's lead and the owner's sync_offset_ms, plus its own panel_offset_ms
+        beats = np.zeros((100 * 50, 10), dtype=np.uint8)
+        beats[:, 0] = np.arange(len(beats)) % 256
+        state = {"id": "t", "title": "T", "artist": "", "playing": True, "duration_ms": 240000, "progress_ms": 0}
+        for sync, extra in ((0, 0), (50, 0), (50, -40)):
+            cfg = dict(self.cfg, sync_offset_ms=sync, panel_offset_ms=extra)
+            s = self.sender(FakePoller(cfg, state, None, beats))
+            s.step(1.0)
+            beat = [p for p in self.packets() if p[3] == 1][0]
+            want = int((60.0 + panel.LEAD + (sync + extra) / 1000) * 50) % 256
+            self.assertEqual(want, beat[11], (sync, extra))
+        self.assertGreaterEqual(panel.LEAD, 0.08)
+
     def test_without_beats_says_so(self):
         state = {"id": "x", "title": "Pod", "artist": "", "playing": True, "duration_ms": 0, "progress_ms": 0}
         s = self.sender(FakePoller(self.cfg, state))
@@ -156,6 +171,28 @@ class Sender(unittest.TestCase):
         got = self.packets()
         self.assertEqual([1], [p[3] for p in got])
         self.assertEqual(0, got[0][4])
+
+    def test_literal_ip_needs_no_lookup(self):
+        s = self.sender(FakePoller(self.cfg, None))
+        with mock.patch("socket.getaddrinfo", side_effect=OSError("no dns")):
+            s.step(1.0)
+            s.step(100.0)
+        self.assertEqual(2, len(self.packets()))
+
+    def test_failed_lookup_keeps_last_address(self):
+        cfg = dict(self.cfg, panel_host="panel.local")
+        good = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("127.0.0.1", self.cfg["panel_port"]))]
+        logs = []
+        s = panel.PanelSender(FakePoller(cfg, None), logs.append)
+        self.addCleanup(s.close)
+        with mock.patch("socket.getaddrinfo", return_value=good):
+            s.step(1.0)
+            s.step(70.0)  # re-resolved, same address: not logged again
+        with mock.patch("socket.getaddrinfo", side_effect=OSError("mdns hiccup")):
+            s.step(140.0)
+            s.step(141.0)
+        self.assertEqual(4, len(self.packets()))  # never went quiet
+        self.assertEqual(1, sum(m.startswith("panel output: sending to") for m in logs))
 
     def test_disabled_without_host(self):
         cfg = dict(self.cfg, panel_host="")

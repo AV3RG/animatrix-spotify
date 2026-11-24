@@ -7,6 +7,7 @@ Packets ('L' 'A', version 1, type; little endian), matching the firmware's link.
   2 meta: track u32 | len | title | len | artist      (ASCII, each <= 48 bytes)
   3 art:  track u32 | 256 bytes, 16x16 greyscale, row-major
 """
+import ipaddress
 import socket
 import struct
 import threading
@@ -20,11 +21,13 @@ from . import analysis
 
 MAX_TEXT = 48
 FPS = 30
-LEAD = 0.05            # seconds: network hop + one panel frame, so the bars land on the beat
+LEAD = 0.08            # seconds: WiFi hop, one panel frame and half a send interval; sync_offset_ms
+                       # (the owner's correction for the lid) and panel_offset_ms come on top
 META_EVERY = 2.0       # re-sent so a panel that rebooted or lost a packet catches up
 ART_EVERY = 10.0
 IDLE_EVERY = 1.0
-RESOLVE_EVERY = 60.0
+RESOLVE_EVERY = 60.0   # a hostname is looked up again this often...
+RETRY_EVERY = 5.0      # ...or this soon after a failed lookup (the last good address keeps working)
 
 
 def track_key(track_id):
@@ -98,18 +101,31 @@ class PanelSender(threading.Thread):
             self.last_err = msg
 
     def _address(self, cfg, now):
-        target = (cfg.get("panel_host") or "", int(cfg.get("panel_port") or 4210))
-        if not target[0]:
+        host, port = cfg.get("panel_host") or "", int(cfg.get("panel_port") or 4210)
+        if not host:
             return None
-        if target != self.target or now - self.resolved_at > RESOLVE_EVERY:
-            self.target, self.resolved_at = target, now
+        if (host, port) != self.target:
+            self.target, self.addr, self.resolved_at = (host, port), None, -1e9
+        try:
+            ipaddress.ip_address(host)
+            self._use(host, (host, port))  # a literal address needs no lookup
+            return self.addr
+        except ValueError:
+            pass
+        if now - self.resolved_at >= (RESOLVE_EVERY if self.addr else RETRY_EVERY):
+            self.resolved_at = now
             try:
-                self.addr = socket.getaddrinfo(target[0], target[1], socket.AF_INET, socket.SOCK_DGRAM)[0][4]
-                self.log(f"panel output: sending to {target[0]} ({self.addr[0]}:{self.addr[1]})")
+                self._use(host, socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4])
             except OSError as e:
-                self.addr = None
-                self._error(f"panel output: cannot find {target[0]}: {e}")
+                keep = " (still sending to the last address)" if self.addr else ""
+                self.resolved_at = now - RESOLVE_EVERY + RETRY_EVERY  # try again soon
+                self._error(f"panel output: cannot find {host}: {e}{keep}")
         return self.addr
+
+    def _use(self, host, addr):
+        if addr != self.addr:
+            self.addr = addr
+            self.log(f"panel output: sending to {host} ({addr[0]}:{addr[1]})")
 
     def _send(self, addr, packet):
         try:
@@ -150,7 +166,8 @@ class PanelSender(threading.Thread):
         beats = poller.analyzer.get(st["id"]) if cfg.get("beat_sync", True) else None
         has_beats = False
         if beats is not None and st["playing"]:
-            i = int((pos + LEAD + cfg.get("panel_offset_ms", 0) / 1000) * analysis.FPS)
+            offset = (cfg.get("sync_offset_ms", 0) + cfg.get("panel_offset_ms", 0)) / 1000
+            i = int((pos + LEAD + offset) * analysis.FPS)
             if 0 <= i < len(beats):
                 row = beats[i]
                 bands, kick, has_beats = row[:analysis.NB], row[analysis.NB], True

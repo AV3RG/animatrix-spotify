@@ -38,8 +38,8 @@ second, whether or not the lid is on:
 
 It sends small UDP packets to port 4210 (`panel_port`) about 30 times a second
 while something plays, once a second otherwise, and makes no extra Spotify
-requests. `panel_offset_ms` nudges the panel's bars like `sync_offset_ms` does
-the lid's. The panel only listens on the local network, so the laptop has to be
+requests. The panel's bars follow `sync_offset_ms` too; `panel_offset_ms` nudges
+them further if they need it (positive if they lag the music). The panel only listens on the local network, so the laptop has to be
 on the same WiFi.
 
 ## Control panel
