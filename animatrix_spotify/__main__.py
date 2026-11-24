@@ -6,7 +6,7 @@ import threading
 import time
 import tomllib
 
-from . import analysis, render, ui
+from . import analysis, panel, render, ui
 from .matrix import Matrix
 from .spotify import NotLoggedIn, RateLimited, Spotify, fetch_image
 
@@ -26,6 +26,9 @@ DEFAULTS = {
     "poll_seconds": 5,        # while something is playing (1 s got the app rate limited for hours)
     "idle_poll_seconds": 15,  # while nothing is; 60 after ten idle minutes
     "pause_timeout": 45,      # seconds a paused track stays on the lid
+    "panel_host": "",         # LED Arcade panel to stream to (IP or name), "" = off
+    "panel_port": 4210,
+    "panel_offset_ms": 0,     # like sync_offset_ms, for the panel's bars
 }
 
 
@@ -153,6 +156,7 @@ def run(cfg):
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     poller = Poller(cfg)
     poller.start()
+    panel.PanelSender(poller, log).start()  # idles until panel_host is set
     matrix, last_err, lit, last_tick = None, None, False, time.monotonic()
     if cfg["ui_host"]:
         ui.serve(cfg["ui_host"], cfg["ui_port"], poller, load_config, set_config,
