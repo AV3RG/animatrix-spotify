@@ -49,6 +49,16 @@ class Packets(unittest.TestCase):
         p = panel.art_packet(9, pixels)
         self.assertEqual(b"LA\x01\x03" + struct.pack("<I", 9) + pixels, p)
 
+    def test_word_layout(self):
+        p = panel.word_packet(7, 3, 450, "Midnight")
+        self.assertEqual(b"LA\x01\x04" + struct.pack("<IHH", 7, 3, 450) + b"\x08Midnight", p)
+        none = panel.word_packet(7, None, 0, "")
+        self.assertEqual(0xFFFF, struct.unpack("<H", none[8:10])[0])
+        self.assertEqual(0, none[12])
+        self.assertEqual(24, panel.word_packet(1, 0, 99999, "x" * 40)[12])  # cut to 24 bytes
+        self.assertEqual(65535, struct.unpack("<H", panel.word_packet(1, 0, 99999, "x")[10:12])[0])
+        self.assertEqual(b"Cafe", panel.word_packet(1, 0, 1, "Café")[13:])
+
     def test_track_key(self):
         a = panel.track_key("spotify:track:abc")
         self.assertEqual(a, panel.track_key("spotify:track:abc"))
@@ -69,12 +79,21 @@ class FakeScene:
         self.art = art
 
 
+class FakeLyrics:
+    def __init__(self, words):
+        self.words = words
+
+    def get(self, track_id):
+        return self.words
+
+
 class FakePoller:
-    def __init__(self, cfg, state, art=None, beats=None):
+    def __init__(self, cfg, state, art=None, beats=None, words=None):
         self.cfg = cfg
         self.state = state
         self.scene = FakeScene(art) if state else None
         self.analyzer = FakeAnalyzer(beats)
+        self.lyrics = FakeLyrics(words)
         self.paused_since = None
 
     def position(self, now):
@@ -193,6 +212,33 @@ class Sender(unittest.TestCase):
             s.step(141.0)
         self.assertEqual(4, len(self.packets()))  # never went quiet
         self.assertEqual(1, sum(m.startswith("panel output: sending to") for m in logs))
+
+    def test_sends_the_word_being_sung(self):
+        # position is 60 s; the sender looks LEAD ahead
+        t = int((60.0 + panel.LEAD) * 1000)
+        words = [[0, 1000, "intro"], [t - 100, t + 400, "Waiting"], [t + 400, t + 900, "in"]]
+        state = {"id": "w", "title": "T", "artist": "", "playing": True, "duration_ms": 240000, "progress_ms": 0}
+        s = self.sender(FakePoller(self.cfg, state, None, None, words))
+        s.step(1.0)
+        word = [p for p in self.packets() if p[3] == 4][0]
+        self.assertEqual(1, struct.unpack("<H", word[8:10])[0])
+        self.assertAlmostEqual(400, struct.unpack("<H", word[10:12])[0], delta=2)
+        self.assertEqual(b"Waiting", word[13:])
+
+    def test_paused_sends_no_word(self):
+        words = [[0, 999999, "held"]]
+        state = {"id": "w", "title": "T", "artist": "", "playing": False, "duration_ms": 240000, "progress_ms": 0}
+        s = self.sender(FakePoller(self.cfg, state, None, None, words))
+        s.step(1.0)
+        word = [p for p in self.packets() if p[3] == 4][0]
+        self.assertEqual(0xFFFF, struct.unpack("<H", word[8:10])[0])
+
+    def test_no_lyrics_sends_no_word_packets(self):
+        state = {"id": "w", "title": "T", "artist": "", "playing": True, "duration_ms": 240000, "progress_ms": 0}
+        for words in (None, []):
+            s = self.sender(FakePoller(self.cfg, state, None, None, words))
+            s.step(1.0)
+            self.assertEqual([], [p for p in self.packets() if p[3] == 4])
 
     def test_disabled_without_host(self):
         cfg = dict(self.cfg, panel_host="")

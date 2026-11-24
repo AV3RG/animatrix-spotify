@@ -42,6 +42,14 @@ requests. The panel's bars follow `sync_offset_ms` too; `panel_offset_ms` nudges
 them further if they need it (positive if they lag the music). The panel only listens on the local network, so the laptop has to be
 on the same WiFi.
 
+While a panel is set, the service also looks up time-synced lyrics on
+[LRCLIB](https://lrclib.net) for each track (word-timed where LRCLIB has it,
+otherwise estimated inside each line) and sends the word being sung, so the
+panel can flash the lyrics word by word. Only Latin-script lyrics are used,
+since the panel's font is ASCII; romanised Hindi or Urdu works, Devanagari
+doesn't. Lookups are cached in `~/.cache/animatrix-spotify/`; `lyrics = false`
+turns them off.
+
 ## Control panel
 
 The service hosts a small web page on port 8890 (`http://<laptop address>:8890/`)
